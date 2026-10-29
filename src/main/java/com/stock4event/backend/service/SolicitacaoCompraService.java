@@ -8,24 +8,41 @@ import com.stock4event.backend.entity.*;
 import com.stock4event.backend.exception.CadastroException;
 import com.stock4event.backend.repository.*;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
-import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class SolicitacaoCompraService {
 
     private static final List<String> TIPOS_FORNECEDOR = List.of("DISTRIBUIDOR", "AMBOS");
     private static final List<String> METODOS_PAGAMENTO = List.of("pix", "credito", "debito", "dinheiro");
-    private static final long SEGUNDOS_PARA_ROTA = 20L;
-    private static final long SEGUNDOS_PARA_ENTREGA = 55L;
+
+    // ── Status do pedido ───────────────────────────────────────────────────
+    // As quatro etapas são percorridas uma a uma, sempre pela mão do fornecedor:
+    // recebido → preparando → em_rota → entregue. Nada avança sozinho.
+    public static final String STATUS_RECEBIDO = "recebido";
+    public static final String STATUS_PREPARANDO = "preparando";
+    public static final String STATUS_EM_ROTA = "em_rota";
+    public static final String STATUS_ENTREGUE = "entregue";
+    public static final String STATUS_CANCELADA = "cancelada";
+
+    /** Etapa seguinte de cada status; o fim da fila (entregue) não tem sucessor. */
+    private static final Map<String, String> PROXIMO_STATUS = Map.of(
+            STATUS_RECEBIDO, STATUS_PREPARANDO,
+            STATUS_PREPARANDO, STATUS_EM_ROTA,
+            STATUS_EM_ROTA, STATUS_ENTREGUE
+    );
+
+    /** Enquanto o pedido não saiu para entrega, ainda dá para cancelar. */
+    private static final List<String> STATUS_CANCELAVEIS =
+            List.of(STATUS_RECEBIDO, STATUS_PREPARANDO, STATUS_EM_ROTA);
 
     @Autowired private SolicitacaoCompraRepository solicitacaoRepository;
     @Autowired private ItemSolicitacaoCompraRepository itemRepository;
@@ -38,21 +55,16 @@ public class SolicitacaoCompraService {
     @Autowired private PagamentoRepository pagamentoRepository;
     @Autowired private EstoqueProdutoService estoqueProdutoService;
 
-    /**
-     * Avança o status sozinho pelo tempo (20 s → em rota, 55 s → entregue), para a demo
-     * funcionar com distribuidoras que não têm usuário. Com false, só o fornecedor muda o status.
-     */
-    @Value("${stock4event.pedidos.status-automatico:true}")
-    private boolean statusAutomatico;
-
     public List<SolicitacaoCompraResponseDTO> listarRecebidas(Long empresaFornecedoraId) {
         return solicitacaoRepository.findByEmpresaFornecedoraIdOrderByCriadoEmDesc(empresaFornecedoraId).stream()
-                .map(this::atualizarStatusDemonstracao)
                 .map(this::toResponse)
                 .toList();
     }
 
-    /** Fornecedor avança o pedido (em_rota → entregue) ou cancela antes da entrega. */
+    /**
+     * Fornecedor move o pedido para a etapa seguinte, ou cancela antes da entrega.
+     * Só aceita o próximo passo da fila: não dá para pular etapa nem voltar atrás.
+     */
     @Transactional
     public SolicitacaoCompraResponseDTO atualizarStatus(Long id, Long empresaFornecedoraId, String novoStatus) {
         SolicitacaoCompra solicitacao = buscar(id);
@@ -62,16 +74,15 @@ public class SolicitacaoCompraService {
 
         String atual = statusAtual(solicitacao);
         String status = novoStatus == null ? "" : novoStatus.trim().toLowerCase();
-        boolean permitido = switch (status) {
-            case "em_rota" -> "aguardando_liberacao".equals(atual);
-            case "entregue" -> "em_rota".equals(atual);
-            case "cancelada" -> "aguardando_liberacao".equals(atual) || "em_rota".equals(atual);
-            default -> false;
-        };
+
+        boolean permitido = STATUS_CANCELADA.equals(status)
+                ? STATUS_CANCELAVEIS.contains(atual)
+                : status.equals(PROXIMO_STATUS.get(atual));
+
         if (!permitido) {
             throw new CadastroException(
                     HttpStatus.BAD_REQUEST,
-                    "Não é possível mudar o pedido de \"" + labelStatus(atual) + "\" para \"" + status + "\"."
+                    "Não é possível mudar o pedido de \"" + labelStatus(atual) + "\" para \"" + labelStatus(status) + "\"."
             );
         }
 
@@ -86,15 +97,16 @@ public class SolicitacaoCompraService {
             throw new CadastroException(HttpStatus.FORBIDDEN, "Pedido não pertence à empresa informada.");
         }
 
-        solicitacao = atualizarStatusDemonstracao(solicitacao);
-        if (!"aguardando_liberacao".equals(statusAtual(solicitacao))) {
+        String atual = statusAtual(solicitacao);
+        // O comprador só cancela antes do despacho; depois disso a mercadoria já saiu.
+        if (!STATUS_RECEBIDO.equals(atual) && !STATUS_PREPARANDO.equals(atual)) {
             throw new CadastroException(
                     HttpStatus.BAD_REQUEST,
                     "Só é possível cancelar antes de o pedido sair para entrega."
             );
         }
 
-        return toResponse(aplicarStatus(solicitacao, "cancelada"));
+        return toResponse(aplicarStatus(solicitacao, STATUS_CANCELADA));
     }
 
     private SolicitacaoCompra buscar(Long id) {
@@ -103,7 +115,7 @@ public class SolicitacaoCompraService {
     }
 
     private String statusAtual(SolicitacaoCompra solicitacao) {
-        return solicitacao.getStatus() != null ? solicitacao.getStatus() : "aguardando_liberacao";
+        return solicitacao.getStatus() != null ? solicitacao.getStatus() : STATUS_RECEBIDO;
     }
 
     /** Grava o novo status na solicitação e no pedido, e aplica os efeitos de estoque e pagamento. */
@@ -117,11 +129,11 @@ public class SolicitacaoCompraService {
             pedidoRepository.save(pedido);
         }
 
-        if ("entregue".equals(status)) {
+        if (STATUS_ENTREGUE.equals(status)) {
             estoqueProdutoService.creditarCompradorSeNecessario(solicitacao);
         }
 
-        if ("cancelada".equals(status)) {
+        if (STATUS_CANCELADA.equals(status)) {
             estoqueProdutoService.devolverEstoqueFornecedor(solicitacao);
             if (pedido != null) {
                 for (Pagamento pagamento : pagamentoRepository.findByPedidoId(pedido.getId())) {
@@ -137,11 +149,10 @@ public class SolicitacaoCompraService {
     public List<SolicitacaoCompraResponseDTO> listarPorComprador(Long empresaCompradoraId) {
         return solicitacaoRepository.findByEmpresaCompradoraIdOrderByCriadoEmDesc(empresaCompradoraId).stream()
                 .map(s -> {
-                    SolicitacaoCompra atualizada = atualizarStatusDemonstracao(s);
-                    if ("entregue".equals(atualizada.getStatus())) {
-                        estoqueProdutoService.creditarCompradorSeNecessario(atualizada);
+                    if (STATUS_ENTREGUE.equals(s.getStatus())) {
+                        estoqueProdutoService.creditarCompradorSeNecessario(s);
                     }
-                    return toResponse(atualizada);
+                    return toResponse(s);
                 })
                 .toList();
     }
@@ -154,8 +165,7 @@ public class SolicitacaoCompraService {
             throw new CadastroException(HttpStatus.FORBIDDEN, "Pedido não pertence à empresa informada.");
         }
 
-        solicitacao = atualizarStatusDemonstracao(solicitacao);
-        if ("entregue".equals(solicitacao.getStatus())) {
+        if (STATUS_ENTREGUE.equals(solicitacao.getStatus())) {
             estoqueProdutoService.creditarCompradorSeNecessario(solicitacao);
         }
 
@@ -220,7 +230,7 @@ public class SolicitacaoCompraService {
         solicitacao.setCidade(endereco.getCidade());
         solicitacao.setUf(endereco.getUf());
         solicitacao.setTaxaEntrega(taxaEntrega);
-        solicitacao.setStatus("aguardando_liberacao");
+        solicitacao.setStatus(STATUS_RECEBIDO);
         solicitacao.setValorTotal(BigDecimal.ZERO);
         solicitacao = solicitacaoRepository.save(solicitacao);
 
@@ -309,7 +319,7 @@ public class SolicitacaoCompraService {
         pedido.setMetodoPagamento(metodoPagamento);
         pedido.setTaxaEntrega(taxaEntrega);
         pedido.setObservacao(dto.getObservacao());
-        pedido.setStatus("aguardando_liberacao");
+        pedido.setStatus(STATUS_RECEBIDO);
         pedido.setValorTotal(valorTotal);
         pedido = pedidoRepository.save(pedido);
 
@@ -342,27 +352,9 @@ public class SolicitacaoCompraService {
         };
     }
 
-    private SolicitacaoCompra atualizarStatusDemonstracao(SolicitacaoCompra solicitacao) {
-        if (!statusAutomatico || solicitacao.getCriadoEm() == null) return solicitacao;
-
-        long segundos = Duration.between(solicitacao.getCriadoEm(), LocalDateTime.now()).getSeconds();
-        String status = statusAtual(solicitacao);
-
-        if ("aguardando_liberacao".equals(status) && segundos >= SEGUNDOS_PARA_ROTA) {
-            solicitacao = aplicarStatus(solicitacao, "em_rota");
-            status = "em_rota";
-        }
-
-        if ("em_rota".equals(status) && segundos >= SEGUNDOS_PARA_ENTREGA) {
-            solicitacao = aplicarStatus(solicitacao, "entregue");
-        }
-
-        return solicitacao;
-    }
-
     private SolicitacaoCompraResponseDTO toResponse(SolicitacaoCompra solicitacao) {
         List<ItemSolicitacaoCompra> itens = itemRepository.findBySolicitacaoId(solicitacao.getId());
-        String status = solicitacao.getStatus() != null ? solicitacao.getStatus() : "aguardando_liberacao";
+        String status = statusAtual(solicitacao);
         int previsaoMinutos = calcularPrevisaoMinutos(status, solicitacao.getCriadoEm());
         return new SolicitacaoCompraResponseDTO(
                 solicitacao,
@@ -374,57 +366,56 @@ public class SolicitacaoCompraService {
         );
     }
 
+    /**
+     * Estimativa mostrada ao comprador. Como o fornecedor move cada etapa na mão,
+     * não existe contagem regressiva real: é só uma faixa por etapa.
+     */
     private int calcularPrevisaoMinutos(String status, LocalDateTime criadoEm) {
-        if ("entregue".equals(status) || "cancelada".equals(status)) {
-            return 0;
-        }
-        if ("em_rota".equals(status)) {
-            return 12 + (criadoEm != null ? (int) (criadoEm.getMinute() % 13) : 5);
-        }
-        if (criadoEm == null) {
-            return 50;
-        }
-        long minutosDecorridos = Duration.between(criadoEm, LocalDateTime.now()).toMinutes();
-        return (int) Math.max(20, 55 - minutosDecorridos);
+        return switch (status) {
+            case STATUS_ENTREGUE, STATUS_CANCELADA -> 0;
+            case STATUS_EM_ROTA -> 15;
+            case STATUS_PREPARANDO -> 35;
+            default -> 50;
+        };
     }
 
     private String formatarPrevisaoEntrega(String status, int minutos) {
         return switch (status) {
-            case "entregue" -> "Pedido entregue";
-            case "cancelada" -> "Pedido cancelado";
-            case "em_rota" -> "Chegada em até " + minutos + " min";
-            default -> {
-                int max = minutos + 15;
-                yield "Previsão de entrega: " + minutos + "–" + max + " min";
-            }
+            case STATUS_ENTREGUE -> "Pedido entregue";
+            case STATUS_CANCELADA -> "Pedido cancelado";
+            case STATUS_EM_ROTA -> "Chegada em até " + minutos + " min";
+            default -> "Previsão de entrega: " + minutos + "–" + (minutos + 15) + " min";
         };
     }
 
     private String labelStatus(String status) {
         return switch (status) {
-            case "aguardando_liberacao" -> "Aguardando liberação da distribuidora";
-            case "em_rota" -> "Saindo para rota de entrega";
-            case "entregue" -> "Pedido entregue";
-            case "cancelada" -> "Pedido cancelado";
+            case STATUS_RECEBIDO -> "Pedido recebido";
+            case STATUS_PREPARANDO -> "Preparando pedido";
+            case STATUS_EM_ROTA -> "Pedido saiu para a entrega";
+            case STATUS_ENTREGUE -> "Entregue";
+            case STATUS_CANCELADA -> "Pedido cancelado";
             default -> "Pedido em andamento";
         };
     }
 
+    /** As quatro etapas da linha do tempo, na ordem em que o fornecedor as percorre. */
     private List<StatusPedidoDTO> montarEtapas(String status) {
         record EtapaDef(String codigo, String label) {}
         List<EtapaDef> defs = List.of(
-                new EtapaDef("pedido_efetuado", "Pedido confirmado"),
-                new EtapaDef("aguardando_liberacao", "Preparando pedido"),
-                new EtapaDef("em_rota", "Saiu para entrega"),
-                new EtapaDef("entregue", "Pedido entregue")
+                new EtapaDef(STATUS_RECEBIDO, "Pedido recebido"),
+                new EtapaDef(STATUS_PREPARANDO, "Preparando pedido"),
+                new EtapaDef(STATUS_EM_ROTA, "Pedido saiu para a entrega"),
+                new EtapaDef(STATUS_ENTREGUE, "Entregue")
         );
 
         int indiceAtivo = switch (status) {
-            case "aguardando_liberacao" -> 1;
-            case "em_rota" -> 2;
-            case "entregue" -> -1;
-            case "cancelada" -> -2;
-            default -> 1;
+            case STATUS_RECEBIDO -> 0;
+            case STATUS_PREPARANDO -> 1;
+            case STATUS_EM_ROTA -> 2;
+            case STATUS_ENTREGUE -> -1;   // tudo concluído
+            case STATUS_CANCELADA -> -2;  // parou no caminho
+            default -> 0;
         };
 
         List<StatusPedidoDTO> etapas = new ArrayList<>();

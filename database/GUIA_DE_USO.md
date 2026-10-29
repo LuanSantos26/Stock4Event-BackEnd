@@ -109,6 +109,38 @@ FROM email_boas_vindas ORDER BY id DESC;
 SELECT status, COUNT(*) FROM email_boas_vindas GROUP BY status;
 ```
 
+### Status do pedido: 4 etapas manuais (29/10/2026)
+
+O pedido do marketplace percorre quatro etapas, **sempre pela mão do fornecedor**. Nada avança
+sozinho por tempo: a demonstração que pulava para "em rota" em 20 s e "entregue" em 55 s foi removida.
+
+| Código no banco | O que o app mostra | Quem aciona |
+|---|---|---|
+| `recebido` | Pedido recebido | status inicial, gravado quando o pedido é criado |
+| `preparando` | Preparando pedido | fornecedor, botão **Preparar pedido** |
+| `em_rota` | Pedido saiu para a entrega | fornecedor, botão **Despachar** |
+| `entregue` | Entregue | fornecedor, botão **Confirmar entrega** |
+| `cancelada` | Pedido cancelado | fornecedor a qualquer momento antes da entrega; comprador só até `preparando` |
+
+A ordem é obrigatória: não dá para pular etapa (de `recebido` direto para `entregue`) nem voltar atrás.
+`entregue` e `cancelada` encerram o pedido. Ao entregar, o estoque do comprador é creditado; ao
+cancelar, o estoque volta ao fornecedor e o pagamento é estornado.
+
+As colunas `solicitacoes_compra.status` e `pedido.status` agora têm **CHECK**: o banco recusa qualquer
+valor fora da lista, inclusive erro de digitação. Antes eram texto livre. A coluna `pedido.status`
+aceita também os status do PDV (`aberto`, `concluido`, `cancelado`), porque a tabela atende os dois fluxos.
+
+Quem já tem banco antigo não precisa fazer nada: ao subir o backend, o `data.sql` troca
+`aguardando_liberacao` por `recebido`, cria os CHECKs e os índices das chaves estrangeiras.
+
+```sql
+-- Em que etapa está cada pedido
+SELECT id, status, valor_total, criado_em FROM solicitacoes_compra ORDER BY id DESC;
+
+-- Quantos pedidos em cada etapa
+SELECT status, COUNT(*) FROM solicitacoes_compra GROUP BY status ORDER BY 1;
+```
+
 ## 5. Backup e restauração
 
 ```bash

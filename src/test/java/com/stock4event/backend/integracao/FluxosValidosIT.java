@@ -135,7 +135,7 @@ class FluxosValidosIT extends IntegracaoBase {
         long id = s.path("id").asLong();
         assertThat(s.path("compradorId").asLong()).isEqualTo(cliente.empresaId());
         assertThat(s.path("valorTotal").decimalValue()).isEqualByComparingTo("29.00"); // 4 × 5,50 + 7
-        assertThat(s.path("status").asText()).isEqualTo("aguardando_liberacao");
+        assertThat(s.path("status").asText()).isEqualTo("recebido");
         assertThat(produtoRepository.findById(produto.getId()).orElseThrow().getEstoque()).isEqualByComparingTo("16");
 
         SolicitacaoCompra salva = solicitacaoRepository.findById(id).orElseThrow();
@@ -143,7 +143,14 @@ class FluxosValidosIT extends IntegracaoBase {
         assertThat(pagamentoRepository.findByPedidoId(salva.getPedido().getId()).get(0).getStatus()).isEqualTo("aprovado");
 
         assertThat(corpo(chamar(auth(GET("/api/solicitacoes-compra/recebidas"), fornecedor)))).hasSize(1);
-        assertThat(status(comCorpo(auth(PATCH("/api/solicitacoes-compra/" + id + "/status"), fornecedor), Map.of("status", "em_rota")))).isEqualTo(200);
+
+        // As 4 etapas são percorridas uma a uma; pular etapa é recusado.
+        assertThat(status(comCorpo(auth(PATCH("/api/solicitacoes-compra/" + id + "/status"), fornecedor),
+                Map.of("status", "entregue")))).isEqualTo(400);
+        assertThat(status(comCorpo(auth(PATCH("/api/solicitacoes-compra/" + id + "/status"), fornecedor),
+                Map.of("status", "preparando")))).isEqualTo(200);
+        assertThat(status(comCorpo(auth(PATCH("/api/solicitacoes-compra/" + id + "/status"), fornecedor),
+                Map.of("status", "em_rota")))).isEqualTo(200);
         assertThat(status(comCorpo(auth(PATCH("/api/solicitacoes-compra/" + id + "/status"), fornecedor),
                 Map.of("empresaFornecedoraId", fornecedor.empresaId(), "status", "entregue")))).isEqualTo(200);
 

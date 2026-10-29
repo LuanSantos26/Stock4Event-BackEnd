@@ -77,23 +77,29 @@ public class NotificacaoService {
         List<NotificacaoDTO> lista = new ArrayList<>();
         for (SolicitacaoCompra s : solicitacoes) {
             String fornecedor = s.getEmpresaFornecedora().getNome();
-            String titulo = switch (s.getStatus() != null ? s.getStatus().toLowerCase() : "aguardando_liberacao") {
-                case "aguardando_liberacao" -> "Aguardando liberação";
-                case "em_rota" -> "Pedido a caminho";
-                case "aprovada" -> "Compra aprovada";
-                case "em_transito" -> "Pedido a caminho";
-                case "entregue" -> "Entrega concluída";
-                case "cancelada" -> "Pedido cancelado";
+            String status = s.getStatus() != null
+                    ? s.getStatus().toLowerCase()
+                    : SolicitacaoCompraService.STATUS_RECEBIDO;
+            String titulo = switch (status) {
+                case SolicitacaoCompraService.STATUS_RECEBIDO -> "Pedido recebido";
+                case SolicitacaoCompraService.STATUS_PREPARANDO -> "Preparando pedido";
+                case SolicitacaoCompraService.STATUS_EM_ROTA -> "Pedido saiu para a entrega";
+                case SolicitacaoCompraService.STATUS_ENTREGUE -> "Entregue";
+                case SolicitacaoCompraService.STATUS_CANCELADA -> "Pedido cancelado";
                 default -> "Status da compra";
             };
-            String mensagem = switch (s.getStatus() != null ? s.getStatus().toLowerCase() : "aguardando_liberacao") {
-                case "aguardando_liberacao" -> "Pedido #" + s.getId() + " com " + fornecedor + " aguardando liberação da distribuidora.";
-                case "em_rota" -> "Pedido #" + s.getId() + " saiu para rota de entrega (" + fornecedor + ").";
-                case "aprovada" -> "Sua solicitação #" + s.getId() + " com " + fornecedor + " foi aprovada.";
-                case "em_transito" -> "Pedido #" + s.getId() + " saiu para entrega (" + fornecedor + ").";
-                case "entregue" -> "Pedido #" + s.getId() + " entregue com sucesso.";
-                case "cancelada" -> "Solicitação #" + s.getId() + " foi cancelada pelo fornecedor.";
-                default -> "Solicitação #" + s.getId() + " enviada para " + fornecedor + " — aguardando confirmação.";
+            String mensagem = switch (status) {
+                case SolicitacaoCompraService.STATUS_RECEBIDO ->
+                        "Pedido #" + s.getId() + " recebido por " + fornecedor + ".";
+                case SolicitacaoCompraService.STATUS_PREPARANDO ->
+                        "Pedido #" + s.getId() + " está sendo preparado por " + fornecedor + ".";
+                case SolicitacaoCompraService.STATUS_EM_ROTA ->
+                        "Pedido #" + s.getId() + " saiu para a entrega (" + fornecedor + ").";
+                case SolicitacaoCompraService.STATUS_ENTREGUE ->
+                        "Pedido #" + s.getId() + " entregue com sucesso.";
+                case SolicitacaoCompraService.STATUS_CANCELADA ->
+                        "Solicitação #" + s.getId() + " foi cancelada.";
+                default -> "Solicitação #" + s.getId() + " enviada para " + fornecedor + ".";
             };
             lista.add(new NotificacaoDTO(
                     "compra-" + s.getId(),

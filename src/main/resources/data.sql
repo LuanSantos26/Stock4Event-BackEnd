@@ -416,3 +416,30 @@ CROSS JOIN (VALUES
 ) AS v(codigo, nome, preco, estoque, descricao, imagem)
 WHERE e.cnpj = '30.004.004/0001-04'
   AND NOT EXISTS (SELECT 1 FROM produtos p WHERE p.codigo = v.codigo);
+
+-- ── Status do pedido: 4 etapas manuais (29/10/2026) ──────────────────────────
+-- Fluxo: recebido -> preparando -> em_rota -> entregue (ou cancelada).
+-- O fornecedor avança cada etapa na mão; nada muda sozinho por tempo.
+-- Antes existia 'aguardando_liberacao' como etapa inicial: vira 'recebido'.
+UPDATE solicitacoes_compra SET status = 'recebido' WHERE status = 'aguardando_liberacao';
+UPDATE pedido               SET status = 'recebido' WHERE status = 'aguardando_liberacao';
+
+-- Trava de integridade: o banco passa a recusar status fora da lista.
+-- Antes a coluna era texto livre e aceitava qualquer valor, inclusive erro de digitação.
+ALTER TABLE solicitacoes_compra DROP CONSTRAINT IF EXISTS ck_solicitacoes_status;
+ALTER TABLE solicitacoes_compra ADD  CONSTRAINT ck_solicitacoes_status
+    CHECK (status IN ('recebido', 'preparando', 'em_rota', 'entregue', 'cancelada'));
+
+-- 'pedido' atende os dois fluxos: marketplace (acima) e PDV (aberto/concluido/cancelado).
+ALTER TABLE pedido DROP CONSTRAINT IF EXISTS ck_pedido_status;
+ALTER TABLE pedido ADD  CONSTRAINT ck_pedido_status
+    CHECK (status IN ('recebido', 'preparando', 'em_rota', 'entregue', 'cancelada',
+                      'aberto', 'concluido', 'cancelado'));
+
+-- Índices nas chaves estrangeiras mais consultadas (o PostgreSQL não cria sozinho).
+CREATE INDEX IF NOT EXISTS idx_solic_comprador   ON solicitacoes_compra(empresa_compradora_id);
+CREATE INDEX IF NOT EXISTS idx_solic_fornecedor  ON solicitacoes_compra(empresa_fornecedora_id);
+CREATE INDEX IF NOT EXISTS idx_solic_status      ON solicitacoes_compra(status);
+CREATE INDEX IF NOT EXISTS idx_itens_solic_solic ON itens_solicitacao_compra(solicitacao_id);
+CREATE INDEX IF NOT EXISTS idx_itens_pedido_ped  ON itens_pedido(pedido_id);
+CREATE INDEX IF NOT EXISTS idx_pagamentos_pedido ON pagamentos(pedido_id);

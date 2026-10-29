@@ -190,7 +190,7 @@ class ProtecaoCamposEOperacoesRejeitadasIT extends IntegracaoBase {
                 "itens", List.of(Map.of("produtoId", p.getId(), "quantidade", 2, "precoUnitario", 0.01)))));
         assertThat(r.getResponse().getStatus()).isEqualTo(201);
         assertThat(corpo(r).path("valorTotal").decimalValue()).isEqualByComparingTo("20.00");
-        assertThat(corpo(r).path("status").asText()).isEqualTo("aguardando_liberacao");
+        assertThat(corpo(r).path("status").asText()).isEqualTo("recebido");
         assertThat(corpo(r).path("itens").get(0).path("precoUnitario").decimalValue()).isEqualByComparingTo("10.00");
     }
 
@@ -211,7 +211,7 @@ class ProtecaoCamposEOperacoesRejeitadasIT extends IntegracaoBase {
         Long pagamentoId = pagamentoRepository.findByPedidoId(pedido.getId()).get(0).getId();
         assertThat(status(comCorpo(auth(PATCH("/api/pagamentos/" + pagamentoId + "/status"), cliente), Map.of("status", "estornado")))).isEqualTo(409);
 
-        assertThat(pedidoRepository.findById(pedido.getId()).orElseThrow().getStatus()).isEqualTo("aguardando_liberacao");
+        assertThat(pedidoRepository.findById(pedido.getId()).orElseThrow().getStatus()).isEqualTo("recebido");
         assertThat(pagamentoRepository.findById(pagamentoId).orElseThrow().getStatus()).isEqualTo("aprovado");
     }
 

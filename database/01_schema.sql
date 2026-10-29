@@ -124,7 +124,12 @@ CREATE TABLE pedido (
     valor_recebido          NUMERIC(10,2),           -- PDV: dinheiro entregue
     troco                   NUMERIC(10,2),           -- PDV: calculado pelo servidor
     cliente_nome            VARCHAR(100),            -- PDV: cliente opcional
-    cliente_documento       VARCHAR(14)              -- PDV: CPF/CNPJ opcional (dígitos)
+    cliente_documento       VARCHAR(14),             -- PDV: CPF/CNPJ opcional (dígitos)
+    -- Atende os dois fluxos: marketplace (recebido…entregue) e PDV (aberto/concluido/cancelado).
+    CONSTRAINT ck_pedido_status CHECK (
+        status IN ('recebido', 'preparando', 'em_rota', 'entregue', 'cancelada',
+                   'aberto', 'concluido', 'cancelado')
+    )
 );
 
 CREATE TABLE itens_pedido (
@@ -165,7 +170,12 @@ CREATE TABLE solicitacoes_compra (
     uf                           VARCHAR(2),
     taxa_entrega                 NUMERIC(10,2),
     estoque_comprador_creditado  BOOLEAN       NOT NULL,
-    criado_em                    TIMESTAMP(6)
+    criado_em                    TIMESTAMP(6),
+    -- 4 etapas percorridas à mão pelo fornecedor, uma de cada vez:
+    -- recebido -> preparando -> em_rota -> entregue (ou cancelada antes da entrega).
+    CONSTRAINT ck_solicitacoes_status CHECK (
+        status IN ('recebido', 'preparando', 'em_rota', 'entregue', 'cancelada')
+    )
 );
 
 CREATE TABLE itens_solicitacao_compra (

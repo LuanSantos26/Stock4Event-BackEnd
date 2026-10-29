@@ -242,7 +242,7 @@ class IsolamentoEmpresasIT extends IntegracaoBase {
         assertThat(status(comCorpo(auth(PATCH("/api/solicitacoes-compra/" + id + "/status"), b),
                 Map.of("status", "entregue")))).isEqualTo(403);
 
-        assertThat(solicitacaoRepository.findById(id).orElseThrow().getStatus()).isEqualTo("aguardando_liberacao");
+        assertThat(solicitacaoRepository.findById(id).orElseThrow().getStatus()).isEqualTo("recebido");
     }
 
     @Test
