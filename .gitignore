@@ -1,0 +1,50 @@
+# Maven
+target/
+!.mvn/wrapper/maven-wrapper.jar
+.mvn/timing.properties
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+
+# Java
+*.class
+*.log
+hs_err_pid*
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Eclipse / STS
+.classpath
+.project
+.settings/
+.springBeans
+.sts4-cache
+.factorypath
+.apt_generated
+
+# Build
+build/
+.gradle/
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.lnk
+
+# OS
+.DS_Store
+
+# VS Code
+.vscode/
+
+# Geração do relatório (dependências locais)
+docs/node_modules/
+docs/.preview/
