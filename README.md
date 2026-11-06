@@ -51,7 +51,7 @@ A API fornece as permissões e dados para os dois fluxos principais do aplicativ
 
 ```text
 📦 backend
- ┣ 📂 src/main/java/com/quickstock/backend/
+ ┣ 📂 src/main/java/com/stock4event/backend/
  ┃ ┣ 📂 config/      # Inicializadores (DemoSeedRunner), CORS e WebConfig
  ┃ ┣ 📂 controller/  # Endpoints REST expostos para o aplicativo
  ┃ ┣ 📂 dto/         # Objetos de transferência de dados (Request/Response)
@@ -90,7 +90,7 @@ cd quickstock-backend
 Acesse o seu PostgreSQL (via pgAdmin, DBeaver ou terminal) e crie o banco vazio:
 
 ```sql
-CREATE DATABASE quickstock;
+CREATE DATABASE stock4event;
 ```
 
 **3. Verifique as credenciais do banco**
@@ -120,7 +120,7 @@ O servidor iniciará e a API estará disponível na porta `8081`.
 Ao iniciar a aplicação pela primeira vez, o Hibernate cria as tabelas e o `data.sql` as popula.
 Em seguida, o componente `DemoSeedRunner` cria automaticamente a conta principal para você acessar o app:
 
-* **E-mail:** `demo@quickstock.com`
+* **E-mail:** `demo@stock4event.com`
 * **Senha:** `demo1234`
 
 Essa conta já possui cartões, PIX, endereços e permite transitar entre as telas de Cliente e Fornecedor. Além dela, 3 distribuidoras já vêm cadastradas com catálogo de produtos e imagens no Marketplace.
@@ -139,7 +139,7 @@ A API possui documentação viva gerada automaticamente. Com o servidor rodando,
 ## 💡 Notas de Desenvolvimento
 
 * **Uploads de Imagens:** As imagens enviadas pelo app não vão para um S3, elas ficam armazenadas estaticamente na pasta `src/main/resources/static/uploads/`.
-* **Avanço Automático de Pedidos:** Para facilitar a demonstração do app, os pedidos mudam de status sozinhos baseados no tempo (ex: de "Aguardando" para "Em rota" após 20 segundos). Isso é controlado pela flag `quickstock.pedidos.status-automatico=true` no `application.properties`.
+* **Avanço Automático de Pedidos:** Para facilitar a demonstração do app, os pedidos mudam de status sozinhos baseados no tempo (ex: de "Aguardando" para "Em rota" após 20 segundos). Isso é controlado pela flag `stock4event.pedidos.status-automatico=true` no `application.properties`.
 * **Mapeamento DTO:** Evitamos retornar entidades puras nos Controllers para não expor a senha em hash ou gerar loops infinitos nas relações JPA.
 
 ---

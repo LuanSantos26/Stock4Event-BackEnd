@@ -8,16 +8,16 @@
         <version>3.4.0</version>
         <relativePath/>
     </parent>
-    <groupId>com.quickstock</groupId>
+    <groupId>com.stock4event</groupId>
     <artifactId>backend</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>QuickStock-BackEnd</name>
-    <description>Back-end para o projeto QuickStock</description>
+    <name>Stock4event-BackEnd</name>
+    <description>Back-end para o projeto Stock4event</description>
 
     <properties>
         <java.version>17</java.version>
-        <!-- 1.18.36 quebra no JDK 24+ (ExceptionInInitializerError / TypeTag :: UNKNOWN) -->
-        <lombok.version>1.18.42</lombok.version>
+        <!-- Lombok precisa suportar o JDK usado na compilação: 1.18.46 vai até o JDK 26 -->
+        <lombok.version>1.18.46</lombok.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
