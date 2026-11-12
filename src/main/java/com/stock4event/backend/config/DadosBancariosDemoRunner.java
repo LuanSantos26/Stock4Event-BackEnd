@@ -16,8 +16,9 @@ import java.util.List;
 
 /**
  * Demonstração: fornecedores sem conta cadastrada ganham dados bancários de exemplo,
- * para o checkout mostrar para onde vai o pagamento. O fornecedor troca em Ajustes → Dados bancários.
- * Não mexe em quem já cadastrou.
+ * para o checkout mostrar para onde vai o pagamento.
+ * Em todas as distribuidoras a chave Pix é a mesma (CHAVE_PIX_DEMO), reaplicada a cada início,
+ * para os pagamentos de teste caírem numa só conta.
  */
 @Component
 @Order(95)
@@ -25,6 +26,9 @@ public class DadosBancariosDemoRunner implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(DadosBancariosDemoRunner.class);
     private static final List<String> TIPOS_FORNECEDOR = List.of("DISTRIBUIDOR", "AMBOS");
+    /** Chave Pix (telefone) usada por todas as distribuidoras na demonstração. */
+    static final String TIPO_CHAVE_PIX_DEMO = "telefone";
+    static final String CHAVE_PIX_DEMO = "+5581988287108";
 
     private final EmpresaRepository empresaRepository;
     private final DadosBancariosRepository dadosRepository;
@@ -38,9 +42,21 @@ public class DadosBancariosDemoRunner implements ApplicationRunner {
     @Transactional
     public void run(ApplicationArguments args) {
         int criados = 0;
+        int atualizados = 0;
         for (Empresa empresa : empresaRepository.findAll()) {
             if (!TIPOS_FORNECEDOR.contains(empresa.getTipo())) continue;
-            if (dadosRepository.findByEmpresaId(empresa.getId()).isPresent()) continue;
+
+            DadosBancarios existente = dadosRepository.findByEmpresaId(empresa.getId()).orElse(null);
+            if (existente != null) {
+                if (!CHAVE_PIX_DEMO.equals(existente.getChavePix()) || !TIPO_CHAVE_PIX_DEMO.equals(existente.getTipoChavePix())) {
+                    existente.setTipoChavePix(TIPO_CHAVE_PIX_DEMO);
+                    existente.setChavePix(CHAVE_PIX_DEMO);
+                    dadosRepository.save(existente);
+                    atualizados++;
+                }
+                continue;
+            }
+
             String cnpj = empresa.getCnpj() == null ? "" : empresa.getCnpj().replaceAll("\\D", "");
             if (cnpj.length() != 14) continue;
 
@@ -53,11 +69,12 @@ public class DadosBancariosDemoRunner implements ApplicationRunner {
             dados.setTipoConta("corrente");
             dados.setTitular(empresa.getNome());
             dados.setDocumento(cnpj);
-            dados.setTipoChavePix("cnpj");
-            dados.setChavePix(cnpj);
+            dados.setTipoChavePix(TIPO_CHAVE_PIX_DEMO);
+            dados.setChavePix(CHAVE_PIX_DEMO);
             dadosRepository.save(dados);
             criados++;
         }
+        if (atualizados > 0) log.info("Chave Pix de demonstração aplicada em {} distribuidora(s).", atualizados);
         if (criados > 0) log.info("Dados bancários de demonstração criados para {} fornecedor(es).", criados);
     }
 }
