@@ -60,6 +60,15 @@ public class Produto {
     @Column(name = "codigo_origem", length = 40)
     private String codigoOrigem;
 
+    /** Preço do palete fechado (opcional). Vazio: o produto só é vendido por unidade. */
+    @DecimalMin("0.0")
+    @Column(name = "preco_palete", precision = 10, scale = 2)
+    private BigDecimal precoPalete;
+
+    /** Quantas unidades vêm em um palete fechado (opcional). */
+    @Column(name = "unidades_por_palete")
+    private Integer unidadesPorPalete;
+
     /** Código de barras (EAN-8, EAN-13, UPC ou GTIN-14), só dígitos. Usado pelo PDV. */
     @Size(max = 14)
     @Column(name = "codigo_barras", length = 14)

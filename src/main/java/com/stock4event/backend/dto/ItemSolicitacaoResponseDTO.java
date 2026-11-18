@@ -15,6 +15,10 @@ public class ItemSolicitacaoResponseDTO {
     private final BigDecimal precoUnitario;
     private final BigDecimal subtotal;
     private final String imagemUrl;
+    private final String tipoVenda;
+    private final Integer quantidadePaletes;
+    private final BigDecimal precoPalete;
+    private final Integer unidadesPorPalete;
 
     public ItemSolicitacaoResponseDTO(ItemSolicitacaoCompra item) {
         this.produtoId = item.getProduto().getId();
@@ -24,5 +28,9 @@ public class ItemSolicitacaoResponseDTO {
         this.precoUnitario = item.getPrecoUnitario();
         this.subtotal = item.getSubtotal();
         this.imagemUrl = item.getProduto().getImagemUrl();
+        this.tipoVenda = item.getTipoVenda() != null ? item.getTipoVenda() : "unidade";
+        this.quantidadePaletes = item.getQuantidadePaletes();
+        this.precoPalete = item.getPrecoPalete();
+        this.unidadesPorPalete = item.getProduto().getUnidadesPorPalete();
     }
 }

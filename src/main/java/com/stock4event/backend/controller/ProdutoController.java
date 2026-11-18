@@ -103,6 +103,7 @@ public class ProdutoController {
         produto.setUnidade(dto.getUnidade());
         produto.setDescricao(dto.getDescricao());
         produto.setImagemUrl(dto.getImagemUrl());
+        aplicarPalete(produto, dto);
         if (dto.getEstoque() != null) {
             produto.setEstoque(dto.getEstoque());
         }
@@ -121,6 +122,16 @@ public class ProdutoController {
         return ResponseEntity.ok(Map.of("mensagem", "Produto removido."));
     }
 
+    /** Palete só vale com preço e quantidade juntos; sem um deles, o produto é vendido só por unidade. */
+    private void aplicarPalete(Produto produto, ProdutoRequestDTO dto) {
+        boolean temPalete = dto.getPrecoPalete() != null
+                && dto.getPrecoPalete().signum() > 0
+                && dto.getUnidadesPorPalete() != null
+                && dto.getUnidadesPorPalete() > 0;
+        produto.setPrecoPalete(temPalete ? dto.getPrecoPalete() : null);
+        produto.setUnidadesPorPalete(temPalete ? dto.getUnidadesPorPalete() : null);
+    }
+
     private Produto mapToEntity(ProdutoRequestDTO dto, Empresa empresa) {
         Produto produto = new Produto();
         produto.setEmpresa(empresa);
@@ -130,6 +141,7 @@ public class ProdutoController {
         produto.setDescricao(dto.getDescricao());
         produto.setImagemUrl(dto.getImagemUrl());
         produto.setEstoque(dto.getEstoque() != null ? dto.getEstoque() : java.math.BigDecimal.ZERO);
+        aplicarPalete(produto, dto);
         produto.setCodigo(estoqueProdutoService.gerarCodigoCatalogo(empresa.getId()));
         return produto;
     }

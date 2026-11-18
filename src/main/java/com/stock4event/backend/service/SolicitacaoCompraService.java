@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -24,8 +25,19 @@ public class SolicitacaoCompraService {
 
     private static final List<String> TIPOS_FORNECEDOR = List.of("DISTRIBUIDOR", "AMBOS");
     private static final List<String> METODOS_PAGAMENTO = List.of("pix", "credito", "debito", "boleto", "dinheiro");
-    private static final long SEGUNDOS_PARA_ROTA = 20L;
-    private static final long SEGUNDOS_PARA_ENTREGA = 55L;
+
+    /**
+     * Etapas de um pedido com entrega. O fornecedor avança até "em_rota";
+     * a última ("entregue") só o cliente marca, quando confirma que recebeu.
+     */
+    static final List<String> FLUXO_ENTREGA = List.of(
+            "aguardando_liberacao", "em_separacao", "abastecendo", "em_rota", "entregue");
+
+    /** Etapas de um pedido com retirada no local. O cliente conclui ao retirar ("entregue"). */
+    static final List<String> FLUXO_RETIRADA = List.of(
+            "aguardando_liberacao", "em_separacao", "pronto_retirada", "entregue");
+
+    @Autowired private EnderecoEntregaRepository enderecoEntregaRepository;
 
     @Autowired private SolicitacaoCompraRepository solicitacaoRepository;
     @Autowired private ItemSolicitacaoCompraRepository itemRepository;
@@ -39,11 +51,15 @@ public class SolicitacaoCompraService {
     @Autowired private EstoqueProdutoService estoqueProdutoService;
 
     /**
-     * Avança o status sozinho pelo tempo (20 s → em rota, 55 s → entregue), para a demo
+     * Avança o status sozinho pelo tempo (uma etapa a cada segundos-por-etapa), para a demo
      * funcionar com distribuidoras que não têm usuário. Com false, só o fornecedor muda o status.
      */
     @Value("${stock4event.pedidos.status-automatico:true}")
     private boolean statusAutomatico;
+
+    /** Na demonstração automática, cada etapa avança depois deste tempo (o fornecedor pode adiantar). */
+    @Value("${stock4event.pedidos.segundos-por-etapa:60}")
+    private long segundosPorEtapa;
 
     public List<SolicitacaoCompraResponseDTO> listarRecebidas(Long empresaFornecedoraId) {
         return solicitacaoRepository.findByEmpresaFornecedoraIdOrderByCriadoEmDesc(empresaFornecedoraId).stream()
@@ -52,7 +68,10 @@ public class SolicitacaoCompraService {
                 .toList();
     }
 
-    /** Fornecedor avança o pedido (em_rota → entregue) ou cancela antes da entrega. */
+    /**
+     * Fornecedor avança o pedido uma etapa por vez (separação → carro → rota) ou cancela.
+     * A conclusão ("entregue") é do cliente: ver {@link #concluirPeloComprador}.
+     */
     @Transactional
     public SolicitacaoCompraResponseDTO atualizarStatus(Long id, Long empresaFornecedoraId, String novoStatus) {
         SolicitacaoCompra solicitacao = buscar(id);
@@ -62,16 +81,32 @@ public class SolicitacaoCompraService {
 
         String atual = statusAtual(solicitacao);
         String status = novoStatus == null ? "" : novoStatus.trim().toLowerCase();
-        boolean permitido = switch (status) {
-            case "em_rota" -> "aguardando_liberacao".equals(atual);
-            case "entregue" -> "em_rota".equals(atual);
-            case "cancelada" -> "aguardando_liberacao".equals(atual) || "em_rota".equals(atual);
-            default -> false;
-        };
+        // Nomes usados por versões antigas do app.
+        if ("preparando".equals(status)) status = "em_separacao";
+        if ("despachado".equals(status)) status = "em_rota";
+        if ("entregue".equals(status)) {
+            throw new CadastroException(
+                    HttpStatus.BAD_REQUEST,
+                    ehRetirada(solicitacao)
+                            ? "Quem conclui a retirada é o cliente, quando buscar os produtos."
+                            : "Quem conclui a entrega é o cliente, quando receber os produtos."
+            );
+        }
+        List<String> fluxo = fluxo(solicitacao);
+        int iAtual = fluxo.indexOf(atual);
+        boolean finalizado = "entregue".equals(atual) || "cancelada".equals(atual);
+        boolean permitido;
+        if ("cancelada".equals(status)) {
+            permitido = !finalizado;
+        } else {
+            // O fornecedor avança uma etapa por vez, sem pular nenhuma.
+            int iNovo = fluxo.indexOf(status);
+            permitido = !finalizado && iAtual >= 0 && iNovo == iAtual + 1;
+        }
         if (!permitido) {
             throw new CadastroException(
                     HttpStatus.BAD_REQUEST,
-                    "Não é possível mudar o pedido de \"" + labelStatus(atual) + "\" para \"" + status + "\"."
+                    "Não é possível mudar o pedido de \"" + labelStatus(atual, solicitacao) + "\" para \"" + labelStatus(status, solicitacao) + "\"."
             );
         }
 
@@ -87,19 +122,62 @@ public class SolicitacaoCompraService {
         }
 
         solicitacao = atualizarStatusDemonstracao(solicitacao);
-        if (!"aguardando_liberacao".equals(statusAtual(solicitacao))) {
+        String atualComprador = statusAtual(solicitacao);
+        if (!"aguardando_liberacao".equals(atualComprador) && !"em_separacao".equals(atualComprador)) {
             throw new CadastroException(
                     HttpStatus.BAD_REQUEST,
-                    "Só é possível cancelar antes de o pedido sair para entrega."
+                    "Só é possível cancelar enquanto o pedido está sendo separado."
             );
         }
 
         return toResponse(aplicarStatus(solicitacao, "cancelada"));
     }
 
+    /**
+     * Último passo do pedido: o cliente confirma que recebeu (entrega) ou retirou (retirada).
+     * Só vale quando o fornecedor já deixou o pedido em rota ou pronto para retirada.
+     */
+    @Transactional
+    public SolicitacaoCompraResponseDTO concluirPeloComprador(Long id, Long empresaCompradoraId) {
+        SolicitacaoCompra solicitacao = buscar(id);
+        if (!solicitacao.getEmpresaCompradora().getId().equals(empresaCompradoraId)) {
+            throw new CadastroException(HttpStatus.BAD_REQUEST, "Pedido não pertence à empresa informada.");
+        }
+
+        solicitacao = atualizarStatusDemonstracao(solicitacao);
+        String atual = statusAtual(solicitacao);
+        if ("entregue".equals(atual)) {
+            return toResponse(solicitacao); // já concluído: não faz nada (toque duplo)
+        }
+        if (!etapaAntesDaConclusao(solicitacao).equals(atual)) {
+            throw new CadastroException(
+                    HttpStatus.BAD_REQUEST,
+                    ehRetirada(solicitacao)
+                            ? "Só dá para concluir quando o pedido estiver pronto para retirada."
+                            : "Só dá para concluir quando o pedido estiver a caminho."
+            );
+        }
+
+        return toResponse(aplicarStatus(solicitacao, "entregue"));
+    }
+
+    /** Etapa em que o pedido espera a confirmação do cliente: em_rota ou pronto_retirada. */
+    private static String etapaAntesDaConclusao(SolicitacaoCompra solicitacao) {
+        List<String> fluxo = fluxo(solicitacao);
+        return fluxo.get(fluxo.size() - 2);
+    }
+
     private SolicitacaoCompra buscar(Long id) {
         return solicitacaoRepository.findById(id)
                 .orElseThrow(() -> new CadastroException(HttpStatus.NOT_FOUND, "Pedido não encontrado."));
+    }
+
+    private static boolean ehRetirada(SolicitacaoCompra solicitacao) {
+        return "retirada".equals(solicitacao.getTipoEntrega());
+    }
+
+    private static List<String> fluxo(SolicitacaoCompra solicitacao) {
+        return ehRetirada(solicitacao) ? FLUXO_RETIRADA : FLUXO_ENTREGA;
     }
 
     private String statusAtual(SolicitacaoCompra solicitacao) {
@@ -119,6 +197,11 @@ public class SolicitacaoCompraService {
 
         if ("entregue".equals(status)) {
             estoqueProdutoService.creditarCompradorSeNecessario(solicitacao);
+        }
+
+        if (("entregue".equals(status) || "cancelada".equals(status)) && solicitacao.getConcluidoEm() == null) {
+            solicitacao.setConcluidoEm(LocalDateTime.now());
+            solicitacao = solicitacaoRepository.save(solicitacao);
         }
 
         if ("cancelada".equals(status)) {
@@ -196,14 +279,30 @@ public class SolicitacaoCompraService {
             throw new CadastroException(HttpStatus.BAD_REQUEST, "Forma de pagamento inválida.");
         }
 
-        if (dto.getEnderecoEntregaId() == null) {
-            throw new CadastroException(HttpStatus.BAD_REQUEST, "Informe o endereço de entrega.");
+        boolean retirada = "retirada".equalsIgnoreCase(
+                dto.getTipoEntrega() != null ? dto.getTipoEntrega().trim() : "");
+
+        EnderecoEntrega endereco;
+        String enderecoResumo;
+        BigDecimal taxaEntrega;
+        if (retirada) {
+            // Retirada no local: o endereço é o do fornecedor (o principal, se ele tiver cadastrado).
+            endereco = enderecoEntregaRepository
+                    .findByEmpresaIdOrderByPrincipalDescApelidoAsc(fornecedora.getId())
+                    .stream().findFirst().orElse(null);
+            enderecoResumo = "Retirada no local: " + (endereco != null
+                    ? EnderecoEntregaDTO.formatarResumo(endereco)
+                    : fornecedora.getNome());
+            taxaEntrega = BigDecimal.ZERO;
+        } else {
+            if (dto.getEnderecoEntregaId() == null) {
+                throw new CadastroException(HttpStatus.BAD_REQUEST, "Informe o endereço de entrega.");
+            }
+            endereco = enderecoEntregaService.validarEnderecoDaEmpresa(
+                    dto.getEnderecoEntregaId(), compradora.getId());
+            enderecoResumo = EnderecoEntregaDTO.formatarResumo(endereco);
+            taxaEntrega = dto.getTaxaEntrega() != null ? dto.getTaxaEntrega() : BigDecimal.ZERO;
         }
-
-        EnderecoEntrega endereco = enderecoEntregaService.validarEnderecoDaEmpresa(
-                dto.getEnderecoEntregaId(), compradora.getId());
-
-        BigDecimal taxaEntrega = dto.getTaxaEntrega() != null ? dto.getTaxaEntrega() : BigDecimal.ZERO;
 
         SolicitacaoCompra solicitacao = new SolicitacaoCompra();
         solicitacao.setEmpresaCompradora(compradora);
@@ -211,14 +310,17 @@ public class SolicitacaoCompraService {
         solicitacao.setUsuarioSolicitante(usuario);
         solicitacao.setObservacao(dto.getObservacao());
         solicitacao.setMetodoPagamento(metodoPagamento);
-        solicitacao.setEnderecoResumo(EnderecoEntregaDTO.formatarResumo(endereco));
-        solicitacao.setCep(endereco.getCep());
-        solicitacao.setLogradouro(endereco.getLogradouro());
-        solicitacao.setNumero(endereco.getNumero());
-        solicitacao.setComplemento(endereco.getComplemento());
-        solicitacao.setBairro(endereco.getBairro());
-        solicitacao.setCidade(endereco.getCidade());
-        solicitacao.setUf(endereco.getUf());
+        solicitacao.setEnderecoResumo(enderecoResumo);
+        if (endereco != null) {
+            solicitacao.setCep(endereco.getCep());
+            solicitacao.setLogradouro(endereco.getLogradouro());
+            solicitacao.setNumero(endereco.getNumero());
+            solicitacao.setComplemento(endereco.getComplemento());
+            solicitacao.setBairro(endereco.getBairro());
+            solicitacao.setCidade(endereco.getCidade());
+            solicitacao.setUf(endereco.getUf());
+        }
+        solicitacao.setTipoEntrega(retirada ? "retirada" : "entrega");
         solicitacao.setTaxaEntrega(taxaEntrega);
         solicitacao.setStatus("aguardando_liberacao");
         solicitacao.setValorTotal(BigDecimal.ZERO);
@@ -237,8 +339,34 @@ public class SolicitacaoCompraService {
                 throw new CadastroException(HttpStatus.BAD_REQUEST, "Produto não pertence ao fornecedor selecionado.");
             }
 
+            boolean porPalete = "palete".equalsIgnoreCase(
+                    itemDto.getTipoVenda() != null ? itemDto.getTipoVenda().trim() : "");
+            BigDecimal unidades = itemDto.getQuantidade();
+            BigDecimal precoUnitario = produto.getPrecoVenda();
+            BigDecimal subtotal;
+            Integer quantidadePaletes = null;
+            if (porPalete) {
+                if (produto.getPrecoPalete() == null || produto.getUnidadesPorPalete() == null
+                        || produto.getUnidadesPorPalete() <= 0) {
+                    throw new CadastroException(
+                            HttpStatus.BAD_REQUEST,
+                            "O produto " + produto.getNome() + " não é vendido em palete fechado."
+                    );
+                }
+                if (itemDto.getQuantidade().stripTrailingZeros().scale() > 0) {
+                    throw new CadastroException(HttpStatus.BAD_REQUEST, "A quantidade de paletes deve ser um número inteiro.");
+                }
+                quantidadePaletes = itemDto.getQuantidade().intValueExact();
+                unidades = BigDecimal.valueOf((long) quantidadePaletes * produto.getUnidadesPorPalete());
+                subtotal = produto.getPrecoPalete().multiply(BigDecimal.valueOf(quantidadePaletes));
+                precoUnitario = produto.getPrecoPalete()
+                        .divide(BigDecimal.valueOf(produto.getUnidadesPorPalete()), 2, RoundingMode.HALF_UP);
+            } else {
+                subtotal = produto.getPrecoVenda().multiply(unidades);
+            }
+
             BigDecimal estoqueAtual = produto.getEstoque() != null ? produto.getEstoque() : BigDecimal.ZERO;
-            if (estoqueAtual.compareTo(itemDto.getQuantidade()) < 0) {
+            if (estoqueAtual.compareTo(unidades) < 0) {
                 throw new CadastroException(
                         HttpStatus.BAD_REQUEST,
                         "Estoque insuficiente para \"" + produto.getNome() + "\". Disponível: "
@@ -246,16 +374,17 @@ public class SolicitacaoCompraService {
                 );
             }
 
-            estoqueProdutoService.debitarEstoque(produto, itemDto.getQuantidade());
-
-            BigDecimal subtotal = produto.getPrecoVenda().multiply(itemDto.getQuantidade());
+            estoqueProdutoService.debitarEstoque(produto, unidades);
 
             ItemSolicitacaoCompra item = new ItemSolicitacaoCompra();
             item.setSolicitacao(solicitacao);
             item.setProduto(produto);
-            item.setQuantidade(itemDto.getQuantidade());
-            item.setPrecoUnitario(produto.getPrecoVenda());
+            item.setQuantidade(unidades);
+            item.setPrecoUnitario(precoUnitario);
             item.setSubtotal(subtotal);
+            item.setTipoVenda(porPalete ? "palete" : "unidade");
+            item.setQuantidadePaletes(quantidadePaletes);
+            item.setPrecoPalete(porPalete ? produto.getPrecoPalete() : null);
             itemRepository.save(item);
 
             total = total.add(subtotal);
@@ -270,6 +399,8 @@ public class SolicitacaoCompraService {
                 fornecedora,
                 usuario,
                 endereco,
+                enderecoResumo,
+                retirada,
                 metodoPagamento,
                 taxaEntrega,
                 solicitacao.getValorTotal(),
@@ -287,6 +418,8 @@ public class SolicitacaoCompraService {
             Empresa fornecedora,
             Usuario usuario,
             EnderecoEntrega endereco,
+            String enderecoResumo,
+            boolean retirada,
             String metodoPagamento,
             BigDecimal taxaEntrega,
             BigDecimal valorTotal,
@@ -297,15 +430,20 @@ public class SolicitacaoCompraService {
         pedido.setOperador(usuario);
         pedido.setEmpresaCompradora(compradora);
         pedido.setEmpresaFornecedora(fornecedora);
-        pedido.setEnderecoEntrega(endereco);
-        pedido.setEnderecoResumo(EnderecoEntregaDTO.formatarResumo(endereco));
-        pedido.setCep(endereco.getCep());
-        pedido.setLogradouro(endereco.getLogradouro());
-        pedido.setNumero(endereco.getNumero());
-        pedido.setComplemento(endereco.getComplemento());
-        pedido.setBairro(endereco.getBairro());
-        pedido.setCidade(endereco.getCidade());
-        pedido.setUf(endereco.getUf());
+        pedido.setEnderecoResumo(enderecoResumo);
+        if (endereco != null) {
+            // Na retirada o endereço é do fornecedor: fica só no resumo, não como endereço de entrega.
+            if (!retirada) {
+                pedido.setEnderecoEntrega(endereco);
+            }
+            pedido.setCep(endereco.getCep());
+            pedido.setLogradouro(endereco.getLogradouro());
+            pedido.setNumero(endereco.getNumero());
+            pedido.setComplemento(endereco.getComplemento());
+            pedido.setBairro(endereco.getBairro());
+            pedido.setCidade(endereco.getCidade());
+            pedido.setUf(endereco.getUf());
+        }
         pedido.setMetodoPagamento(metodoPagamento);
         pedido.setTaxaEntrega(taxaEntrega);
         pedido.setObservacao(dto.getObservacao());
@@ -347,17 +485,16 @@ public class SolicitacaoCompraService {
         if (!statusAutomatico || solicitacao.getCriadoEm() == null) return solicitacao;
 
         long segundos = Duration.between(solicitacao.getCriadoEm(), LocalDateTime.now()).getSeconds();
-        String status = statusAtual(solicitacao);
+        List<String> fluxo = fluxo(solicitacao);
+        int iAtual = fluxo.indexOf(statusAtual(solicitacao));
+        if (iAtual < 0) return solicitacao; // cancelada ou status antigo
 
-        if ("aguardando_liberacao".equals(status) && segundos >= SEGUNDOS_PARA_ROTA) {
-            solicitacao = aplicarStatus(solicitacao, "em_rota");
-            status = "em_rota";
+        // Só avança (nunca volta): se o fornecedor já adiantou uma etapa, ela é mantida.
+        // Para antes da última: "entregue" é sempre o cliente que confirma.
+        int iDevido = (int) Math.min(fluxo.size() - 2, segundos / Math.max(1, segundosPorEtapa));
+        for (int i = iAtual + 1; i <= iDevido; i++) {
+            solicitacao = aplicarStatus(solicitacao, fluxo.get(i));
         }
-
-        if ("em_rota".equals(status) && segundos >= SEGUNDOS_PARA_ENTREGA) {
-            solicitacao = aplicarStatus(solicitacao, "entregue");
-        }
-
         return solicitacao;
     }
 
@@ -368,10 +505,10 @@ public class SolicitacaoCompraService {
         return new SolicitacaoCompraResponseDTO(
                 solicitacao,
                 itens,
-                labelStatus(status),
-                montarEtapas(status),
+                labelStatus(status, solicitacao),
+                montarEtapas(status, solicitacao),
                 previsaoMinutos,
-                formatarPrevisaoEntrega(status, previsaoMinutos)
+                formatarPrevisaoEntrega(status, previsaoMinutos, ehRetirada(solicitacao))
         );
     }
 
@@ -389,11 +526,19 @@ public class SolicitacaoCompraService {
         return (int) Math.max(20, 55 - minutosDecorridos);
     }
 
-    private String formatarPrevisaoEntrega(String status, int minutos) {
+    private String formatarPrevisaoEntrega(String status, int minutos, boolean retirada) {
+        if (retirada) {
+            return switch (status) {
+                case "entregue" -> "Retirada concluída";
+                case "cancelada" -> "Pedido cancelado";
+                case "pronto_retirada" -> "Pronto! Retire no local e toque em Concluir retirada";
+                default -> "Avisaremos quando estiver pronto para retirada";
+            };
+        }
         return switch (status) {
-            case "entregue" -> "Pedido entregue";
+            case "entregue" -> "Entrega concluída";
             case "cancelada" -> "Pedido cancelado";
-            case "em_rota" -> "Chegada em até " + minutos + " min";
+            case "em_rota" -> "Chegada em até " + minutos + " min. Ao receber, toque em Concluir entrega";
             default -> {
                 int max = minutos + 15;
                 yield "Previsão de entrega: " + minutos + "–" + max + " min";
@@ -401,40 +546,45 @@ public class SolicitacaoCompraService {
         };
     }
 
-    private String labelStatus(String status) {
+    private String labelStatus(String status, SolicitacaoCompra solicitacao) {
+        boolean retirada = ehRetirada(solicitacao);
         return switch (status) {
             case "aguardando_liberacao" -> "Aguardando liberação da distribuidora";
-            case "em_rota" -> "Saindo para rota de entrega";
-            case "entregue" -> "Pedido entregue";
+            case "em_separacao" -> "Produto em separação";
+            case "abastecendo" -> "Abastecendo o carro";
+            case "em_rota" -> "A caminho, em rota de entrega";
+            case "pronto_retirada" -> "Pronto para retirada no local";
+            case "entregue" -> retirada ? "Retirada concluída pelo cliente" : "Entrega concluída pelo cliente";
             case "cancelada" -> "Pedido cancelado";
             default -> "Pedido em andamento";
         };
     }
 
-    private List<StatusPedidoDTO> montarEtapas(String status) {
-        record EtapaDef(String codigo, String label) {}
-        List<EtapaDef> defs = List.of(
-                new EtapaDef("pedido_efetuado", "Pedido confirmado"),
-                new EtapaDef("aguardando_liberacao", "Preparando pedido"),
-                new EtapaDef("em_rota", "Saiu para entrega"),
-                new EtapaDef("entregue", "Pedido entregue")
-        );
+    private List<StatusPedidoDTO> montarEtapas(String status, SolicitacaoCompra solicitacao) {
+        boolean retirada = ehRetirada(solicitacao);
+        List<String> fluxo = fluxo(solicitacao);
+        List<String> labels = retirada
+                ? List.of("Pedido confirmado", "Produto em separação", "Pronto para retirada", "Retirada concluída")
+                : List.of("Pedido confirmado", "Produto em separação", "Abastecendo o carro",
+                        "A caminho / em rota", "Entrega concluída");
 
-        int indiceAtivo = switch (status) {
-            case "aguardando_liberacao" -> 1;
-            case "em_rota" -> 2;
-            case "entregue" -> -1;
-            case "cancelada" -> -2;
-            default -> 1;
-        };
+        // A primeira etapa ("Pedido confirmado") já vale assim que o pedido existe.
+        int indiceAtivo;
+        if ("cancelada".equals(status)) {
+            indiceAtivo = -2;
+        } else if ("entregue".equals(status)) {
+            indiceAtivo = -1;
+        } else {
+            indiceAtivo = Math.max(1, fluxo.indexOf(status));
+        }
 
         List<StatusPedidoDTO> etapas = new ArrayList<>();
-        for (int i = 0; i < defs.size(); i++) {
-            EtapaDef def = defs.get(i);
+        for (int i = 0; i < fluxo.size(); i++) {
+            String codigo = i == 0 ? "pedido_efetuado" : fluxo.get(i);
             // Cancelado: só a confirmação fica concluída e nenhuma etapa fica ativa.
             boolean concluida = indiceAtivo == -1 || (indiceAtivo == -2 ? i == 0 : i < indiceAtivo);
             boolean ativa = i == indiceAtivo;
-            etapas.add(new StatusPedidoDTO(def.codigo(), def.label(), i + 1, concluida, ativa));
+            etapas.add(new StatusPedidoDTO(codigo, labels.get(i), i + 1, concluida, ativa));
         }
         return etapas;
     }

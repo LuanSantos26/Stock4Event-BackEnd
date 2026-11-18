@@ -12,7 +12,11 @@ public class StatusSolicitacaoRequestDTO {
     @NotNull
     private Long empresaFornecedoraId;
 
-    /** em_rota, entregue ou cancelada. */
+    /**
+     * Próxima etapa. Entrega: em_separacao, abastecendo, em_rota.
+     * Retirada: em_separacao, pronto_retirada. Ou cancelada.
+     * "entregue" não vale aqui: o cliente conclui em PATCH /{id}/concluir.
+     */
     @NotBlank
     private String status;
 }

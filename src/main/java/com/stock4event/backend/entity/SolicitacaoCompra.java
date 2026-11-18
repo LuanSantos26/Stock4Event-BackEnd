@@ -71,6 +71,10 @@ public class SolicitacaoCompra {
     @Size(max = 2)
     private String uf;
 
+    /** "entrega" (padrão) ou "retirada" (o comprador busca no local do fornecedor). */
+    @Column(name = "tipo_entrega", length = 10)
+    private String tipoEntrega = "entrega";
+
     @Column(name = "taxa_entrega", precision = 10, scale = 2)
     private BigDecimal taxaEntrega = BigDecimal.ZERO;
 
@@ -81,6 +85,10 @@ public class SolicitacaoCompra {
     @CreationTimestamp
     @Column(name = "criado_em", updatable = false)
     private LocalDateTime criadoEm;
+
+    /** Quando o pedido terminou: o cliente concluiu a entrega/retirada, ou foi cancelado. */
+    @Column(name = "concluido_em")
+    private LocalDateTime concluidoEm;
 
     @Column(name = "estoque_comprador_creditado", nullable = false)
     private Boolean estoqueCompradorCreditado = false;

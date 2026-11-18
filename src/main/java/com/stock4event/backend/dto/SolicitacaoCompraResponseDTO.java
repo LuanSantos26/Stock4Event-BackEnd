@@ -23,6 +23,7 @@ public class SolicitacaoCompraResponseDTO {
     private final String metodoPagamento;
     private final String enderecoResumo;
     private final BigDecimal taxaEntrega;
+    private final String tipoEntrega;
     private final LocalDateTime criadoEm;
     private final List<ItemSolicitacaoResponseDTO> itens;
     private final String statusLabel;
@@ -49,6 +50,7 @@ public class SolicitacaoCompraResponseDTO {
         this.metodoPagamento = solicitacao.getMetodoPagamento();
         this.enderecoResumo = solicitacao.getEnderecoResumo();
         this.taxaEntrega = solicitacao.getTaxaEntrega();
+        this.tipoEntrega = solicitacao.getTipoEntrega() != null ? solicitacao.getTipoEntrega() : "entrega";
         this.criadoEm = solicitacao.getCriadoEm();
         this.itens = itens.stream().map(ItemSolicitacaoResponseDTO::new).toList();
         this.statusLabel = statusLabel;

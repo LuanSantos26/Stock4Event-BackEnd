@@ -23,6 +23,8 @@ public class ProdutoRecenteDTO {
     private final Integer ativo;
     private final BigDecimal estoque;
     private final String codigo;
+    private final BigDecimal precoPalete;
+    private final Integer unidadesPorPalete;
     private final String fornecedorNome;
     private final String fornecedorLogoUrl;
     private final String fornecedorCapaUrl;
@@ -45,6 +47,8 @@ public class ProdutoRecenteDTO {
         this.ativo = produto.getAtivo();
         this.estoque = produto.getEstoque();
         this.codigo = produto.getCodigo();
+        this.precoPalete = produto.getPrecoPalete();
+        this.unidadesPorPalete = produto.getUnidadesPorPalete();
         this.fornecedorNome = empresa.getNome();
         this.fornecedorLogoUrl = empresa.getLogoUrl();
         this.fornecedorCapaUrl = empresa.getCapaUrl();

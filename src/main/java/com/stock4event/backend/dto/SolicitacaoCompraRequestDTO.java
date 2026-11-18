@@ -29,7 +29,12 @@ public class SolicitacaoCompraRequestDTO {
     @Size(max = 20)
     private String metodoPagamento;
 
+    /** Obrigatório quando tipoEntrega = "entrega". */
     private Long enderecoEntregaId;
+
+    /** "entrega" (padrão) ou "retirada". */
+    @Size(max = 10)
+    private String tipoEntrega;
 
     private BigDecimal taxaEntrega;
 

@@ -15,7 +15,9 @@ public class NotificacaoController {
     @Autowired private NotificacaoService notificacaoService;
 
     @GetMapping
-    public List<NotificacaoDTO> listar(@RequestParam Long empresaCompradoraId) {
-        return notificacaoService.listar(empresaCompradoraId);
+    public List<NotificacaoDTO> listar(
+            @RequestParam Long empresaCompradoraId,
+            @RequestParam(required = false) String perfil) {
+        return notificacaoService.listar(empresaCompradoraId, perfil);
     }
 }

@@ -1,6 +1,7 @@
 package com.stock4event.backend.dto;
 
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -31,6 +32,14 @@ public class ProdutoRequestDTO {
 
     @DecimalMin("0.0")
     private BigDecimal estoque;
+
+    /** Preço do palete fechado (opcional). */
+    @DecimalMin("0.0")
+    private BigDecimal precoPalete;
+
+    /** Unidades em um palete fechado (opcional; obrigatório quando houver preço do palete). */
+    @Min(1)
+    private Integer unidadesPorPalete;
 
     /** Opcional. Vazio no cadastro: o servidor gera um código interno (EAN-13 começando com 2). */
     @Size(max = 20)

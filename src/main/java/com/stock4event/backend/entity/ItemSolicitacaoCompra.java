@@ -38,4 +38,16 @@ public class ItemSolicitacaoCompra {
     @NotNull
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal subtotal;
+
+    /** "unidade" ou "palete". A quantidade acima é sempre em unidades (é o que mexe no estoque). */
+    @Column(name = "tipo_venda", length = 10)
+    private String tipoVenda = "unidade";
+
+    /** Quantos paletes fechados foram comprados (só quando tipoVenda = "palete"). */
+    @Column(name = "quantidade_paletes")
+    private Integer quantidadePaletes;
+
+    /** Preço de um palete na hora da compra (só quando tipoVenda = "palete"). */
+    @Column(name = "preco_palete", precision = 10, scale = 2)
+    private BigDecimal precoPalete;
 }

@@ -20,6 +20,8 @@ public class ProdutoResponseDTO {
     private final String codigo;
     private final String codigoOrigem;
     private final String codigoBarras;
+    private final BigDecimal precoPalete;
+    private final Integer unidadesPorPalete;
 
     public ProdutoResponseDTO(Produto produto) {
         this.id = produto.getId();
@@ -34,5 +36,7 @@ public class ProdutoResponseDTO {
         this.codigo = produto.getCodigo();
         this.codigoOrigem = produto.getCodigoOrigem();
         this.codigoBarras = produto.getCodigoBarras();
+        this.precoPalete = produto.getPrecoPalete();
+        this.unidadesPorPalete = produto.getUnidadesPorPalete();
     }
 }

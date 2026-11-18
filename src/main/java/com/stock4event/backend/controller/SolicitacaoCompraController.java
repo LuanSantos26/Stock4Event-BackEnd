@@ -50,6 +50,14 @@ public class SolicitacaoCompraController {
         return solicitacaoCompraService.atualizarStatus(id, dto.getEmpresaFornecedoraId(), dto.getStatus());
     }
 
+    /** Cliente confirma que recebeu (ou retirou) o pedido: último passo da logística. */
+    @PatchMapping("/{id}/concluir")
+    public SolicitacaoCompraResponseDTO concluir(
+            @PathVariable Long id,
+            @RequestParam Long empresaCompradoraId) {
+        return solicitacaoCompraService.concluirPeloComprador(id, empresaCompradoraId);
+    }
+
     @PatchMapping("/{id}/cancelar")
     public SolicitacaoCompraResponseDTO cancelar(
             @PathVariable Long id,

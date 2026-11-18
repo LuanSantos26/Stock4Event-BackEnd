@@ -12,7 +12,11 @@ public class ItemSolicitacaoRequestDTO {
     @NotNull
     private Long produtoId;
 
+    /** Em unidades, ou em número de paletes quando tipoVenda = "palete". */
     @NotNull
     @DecimalMin("0.001")
     private BigDecimal quantidade;
+
+    /** "unidade" (padrão) ou "palete". */
+    private String tipoVenda;
 }
