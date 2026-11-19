@@ -52,14 +52,23 @@ public class FinanceiroService {
         LocalDateTime desde = inicio.atDay(1).atStartOfDay();
         LocalDateTime ate = meses.get(meses.size() - 1).plusMonths(1).atDay(1).atStartOfDay();
 
-        List<SolicitacaoCompra> comprasPeriodo = solicitacaoRepository
-                .findComprasPorEmpresaNoPeriodo(empresaCompradoraId, desde, ate, OBS_SEED);
+        List<SolicitacaoCompra> comprasPeriodo = semCanceladas(solicitacaoRepository
+                .findComprasPorEmpresaNoPeriodo(empresaCompradoraId, desde, ate, OBS_SEED));
         List<Pedido> vendasPeriodo = pedidoRepository
                 .findVendasPorEmpresaNoPeriodo(empresaCompradoraId, desde, ate);
+        // Faturamento = vendas no PDV (barracas) + vendas pelo marketplace (pedidos recebidos como distribuidora).
+        List<SolicitacaoCompra> vendasMarketplace = solicitacaoRepository
+                .findVendasMarketplacePorEmpresaNoPeriodo(empresaCompradoraId, desde, ate, OBS_SEED);
 
         Map<YearMonth, BigDecimal> comprasPorMes = agruparComprasPorMes(comprasPeriodo);
         Map<YearMonth, BigDecimal> vendasPorMes = agruparVendasPorMes(vendasPeriodo);
         Map<YearMonth, Long> pedidosPorMes = agruparContagemPedidosPorMes(vendasPeriodo);
+        for (SolicitacaoCompra s : vendasMarketplace) {
+            if (s.getCriadoEm() == null) continue;
+            YearMonth ym = YearMonth.from(s.getCriadoEm());
+            vendasPorMes.merge(ym, valorVendaMarketplace(s), BigDecimal::add);
+            pedidosPorMes.merge(ym, 1L, Long::sum);
+        }
 
         List<MesLucroDTO> lucrosMensais = new ArrayList<>();
         List<MesValorDTO> comprasMensais = new ArrayList<>();
@@ -139,8 +148,8 @@ public class FinanceiroService {
         LocalDateTime fim = hoje.plusDays(1).atStartOfDay();
         DateTimeFormatter horaFmt = DateTimeFormatter.ofPattern("HH:mm");
 
-        List<SolicitacaoCompra> comprasHoje = solicitacaoRepository
-                .findComprasPorEmpresaNoPeriodo(empresaCompradoraId, inicio, fim, OBS_SEED);
+        List<SolicitacaoCompra> comprasHoje = semCanceladas(solicitacaoRepository
+                .findComprasPorEmpresaNoPeriodo(empresaCompradoraId, inicio, fim, OBS_SEED));
 
         BigDecimal totalCompras = comprasHoje.stream()
                 .map(this::valorCompra)
@@ -171,9 +180,34 @@ public class FinanceiroService {
         List<Pedido> pedidosHoje = pedidoRepository
                 .findVendasPorEmpresaNoPeriodo(empresaCompradoraId, inicio, fim);
 
+        List<SolicitacaoCompra> vendasMarketplaceHoje = solicitacaoRepository
+                .findVendasMarketplacePorEmpresaNoPeriodo(empresaCompradoraId, inicio, fim, OBS_SEED);
+
         BigDecimal totalVendas = pedidosHoje.stream()
                 .map(Pedido::getValorTotal)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .add(vendasMarketplaceHoje.stream()
+                        .map(this::valorVendaMarketplace)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add));
+
+        for (SolicitacaoCompra venda : vendasMarketplaceHoje) {
+            String cliente = venda.getEmpresaCompradora() != null
+                    ? venda.getEmpresaCompradora().getNome()
+                    : "Cliente";
+            String horario = venda.getCriadoEm().format(horaFmt);
+            itemSolicitacaoRepository.findBySolicitacaoId(venda.getId()).forEach(item -> {
+                String nome = item.getProduto() != null ? item.getProduto().getNome() : "Produto";
+                String unidade = item.getProduto() != null ? item.getProduto().getUnidade() : "UN";
+                movimentos.add(new MovimentoStockDiaDTO(
+                        "venda",
+                        nome,
+                        horario,
+                        item.getQuantidade().stripTrailingZeros().toPlainString() + " " + unidade,
+                        item.getSubtotal(),
+                        cliente
+                ));
+            });
+        }
 
         for (Pedido pedido : pedidosHoje) {
             String barraca = pedido.getBarraca() != null ? pedido.getBarraca().getNome() : "Barraca";
@@ -212,9 +246,21 @@ public class FinanceiroService {
                 lucro,
                 margem,
                 comprasHoje.size(),
-                pedidosHoje.size(),
+                pedidosHoje.size() + vendasMarketplaceHoje.size(),
                 movimentos
         );
+    }
+
+    /** Compra cancelada não saiu do caixa: fica fora das compras e do lucro. */
+    private static List<SolicitacaoCompra> semCanceladas(List<SolicitacaoCompra> lista) {
+        return lista.stream()
+                .filter(s -> s.getStatus() == null || !"cancelada".equalsIgnoreCase(s.getStatus()))
+                .collect(Collectors.toList());
+    }
+
+    /** Quanto a distribuidora fatura num pedido do marketplace: o valor dos produtos (o frete não entra). */
+    private BigDecimal valorVendaMarketplace(SolicitacaoCompra s) {
+        return s.getValorTotal() != null ? s.getValorTotal() : BigDecimal.ZERO;
     }
 
     private BigDecimal valorCompra(SolicitacaoCompra s) {

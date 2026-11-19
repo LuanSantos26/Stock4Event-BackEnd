@@ -26,4 +26,19 @@ public interface SolicitacaoCompraRepository extends JpaRepository<SolicitacaoCo
             @Param("desde") LocalDateTime desde,
             @Param("ate") LocalDateTime ate,
             @Param("seedObs") String seedObs);
+
+    /** Vendas pelo marketplace: pedidos que outras empresas fizeram para esta distribuidora (sem os cancelados). */
+    @Query("""
+            SELECT s FROM SolicitacaoCompra s
+            WHERE s.empresaFornecedora.id = :empresaId
+            AND s.criadoEm >= :desde AND s.criadoEm < :ate
+            AND (s.observacao IS NULL OR s.observacao <> :seedObs)
+            AND (s.status IS NULL OR LOWER(s.status) <> 'cancelada')
+            ORDER BY s.criadoEm DESC
+            """)
+    List<SolicitacaoCompra> findVendasMarketplacePorEmpresaNoPeriodo(
+            @Param("empresaId") Long empresaId,
+            @Param("desde") LocalDateTime desde,
+            @Param("ate") LocalDateTime ate,
+            @Param("seedObs") String seedObs);
 }
